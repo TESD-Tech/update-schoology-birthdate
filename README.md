@@ -34,14 +34,36 @@ Scripts are provided in five languages. **Node.js is the primary implementation*
 
 ### Finding Your `STUDENT_ROLE_ID`
 
-Make a GET request to `https://api.schoology.com/v1/roles` with a valid OAuth header. Look for the role whose `title` matches your student role (e.g., "Student"). Use the `id` field value.
-
-Example using curl:
+A `list-roles` helper is included for every language. Once your `.env` has `SCHOOLOGY_KEY` and `SCHOOLOGY_SECRET`, run whichever matches your environment:
 
 ```bash
-curl -s -H "Authorization: OAuth realm=\"Schoology API\",oauth_consumer_key=\"YOUR_KEY\",oauth_token=\"\",oauth_nonce=\"$(uuidgen)\",oauth_timestamp=\"$(date +%s)\",oauth_signature_method=\"PLAINTEXT\",oauth_signature=\"YOUR_SECRET%26\",oauth_version=\"1.0\"" \
-  "https://api.schoology.com/v1/roles" | jq '.role[] | {id, title}'
+# Node.js (primary)
+cd node && node list-roles.js
+
+# Python
+cd python && python list_roles.py
+
+# PHP
+cd php && php list_roles.php
+
+# Bash
+cd bash && ./list_roles.sh
+
+# PowerShell
+cd powershell && .\list_roles.ps1
 ```
+
+All five print the same table:
+
+```text
+  ID          Title
+  ----------  --------------------
+  12345       Student
+  12346       Teacher
+  12347       Administrator
+```
+
+Copy the ID(s) next to your student role(s) and set them as a comma-separated list in `STUDENT_ROLE_IDS` in your `.env`. Districts often have more than one student role — include all of them.
 
 ### Configuration
 
@@ -50,19 +72,29 @@ Copy `.env.example` to `.env` and fill in your credentials:
 ```dotenv
 SCHOOLOGY_KEY=your_consumer_key_here
 SCHOOLOGY_SECRET=your_consumer_secret_here
-STUDENT_ROLE_ID=your_student_role_id_here
+STUDENT_ROLE_IDS=695428,311125
 ```
 
 ---
 
 ## Running the Scripts
 
+All scripts require one of three modes. Running without arguments prints help and exits.
+
+| Mode               | What it does                                          |
+| ------------------ | ----------------------------------------------------- |
+| `--all`            | Update every student account                          |
+| `--uid <school_uid>` | Update one specific student (safe for initial testing) |
+| `--random`         | Pick one student at random (quick smoke test)         |
+
 ### Node.js (primary)
 
 ```bash
 cd node
 npm install
-node update-birthdate.js
+node update-birthdate.js --random
+node update-birthdate.js --uid 100234
+node update-birthdate.js --all
 ```
 
 Requires Node.js 18+.
@@ -72,7 +104,9 @@ Requires Node.js 18+.
 ```bash
 cd python
 pip install -r requirements.txt
-python update_birthdate.py
+python update_birthdate.py --random
+python update_birthdate.py --uid 100234
+python update_birthdate.py --all
 ```
 
 Requires Python 3.7+.
@@ -81,7 +115,9 @@ Requires Python 3.7+.
 
 ```bash
 cd php
-php update_birthdate.php
+php update_birthdate.php --random
+php update_birthdate.php --uid 100234
+php update_birthdate.php --all
 ```
 
 Requires PHP 7.4+ with cURL extension enabled. No Composer needed.
@@ -91,7 +127,9 @@ Requires PHP 7.4+ with cURL extension enabled. No Composer needed.
 ```bash
 cd bash
 chmod +x update_birthdate.sh
-./update_birthdate.sh
+./update_birthdate.sh --random
+./update_birthdate.sh --uid 100234
+./update_birthdate.sh --all
 ```
 
 Requires `curl` and `jq`. Works on macOS and Linux.
@@ -100,7 +138,9 @@ Requires `curl` and `jq`. Works on macOS and Linux.
 
 ```powershell
 cd powershell
-.\update_birthdate.ps1
+.\update_birthdate.ps1 -Random
+.\update_birthdate.ps1 -Uid 100234
+.\update_birthdate.ps1 -All
 ```
 
 Works on Windows PowerShell 5.1+ and PowerShell 7+.

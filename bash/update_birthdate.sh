@@ -1,11 +1,44 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Load .env from parent directory if present
+USAGE="Usage: $(basename "$0") <mode>
+
+Modes:
+  --all              Update all student accounts
+  --uid <school_uid> Update one specific student by school_uid
+  --random           Update one randomly selected student (smoke test)
+
+Examples:
+  $(basename "$0") --uid 100234
+  $(basename "$0") --random
+  $(basename "$0") --all"
+
+MODE="${1:-}"
+MODE_ARG="${2:-}"
+
+if [[ -z "$MODE" || "$MODE" == "--help" || "$MODE" == "-h" ]]; then
+  echo "$USAGE"
+  exit 0
+fi
+
+if [[ "$MODE" != "--all" && "$MODE" != "--uid" && "$MODE" != "--random" ]]; then
+  echo "Unknown option: $MODE" >&2
+  echo ""
+  echo "$USAGE"
+  exit 1
+fi
+
+if [[ "$MODE" == "--uid" && -z "$MODE_ARG" ]]; then
+  echo "--uid requires a school_uid argument" >&2
+  echo ""
+  echo "$USAGE"
+  exit 1
+fi
+
+# Load .env
 ENV_FILE="$(dirname "$0")/../.env"
 if [ -f "$ENV_FILE" ]; then
   while IFS='=' read -r name value; do
-    # Skip comments and blank lines
     [[ "$name" =~ ^#.*$ || -z "$name" ]] && continue
     export "$name"="$value"
   done < "$ENV_FILE"
@@ -28,75 +61,108 @@ oauth_header() {
 }
 
 api_get() {
-  local path="$1"
   curl -sf \
     -H "Authorization: $(oauth_header)" \
     -H "Accept: application/json" \
-    "${BASE_URL}${path}"
+    "${BASE_URL}${1}"
 }
 
 api_put() {
-  local path="$1"
-  local body="$2"
-  curl -sf \
-    -X PUT \
+  curl -sf -X PUT \
     -H "Authorization: $(oauth_header)" \
     -H "Content-Type: application/json" \
     -H "Accept: application/json" \
-    -d "$body" \
-    "${BASE_URL}${path}"
+    -d "$2" \
+    "${BASE_URL}${1}"
 }
 
-echo "Fetching students..."
+fetch_all_students() {
+  local all="[]"
+  local start=0 limit=200
 
-students_json="[]"
-start=0
-limit=200
+  while true; do
+    page=$(api_get "/v1/users?role_ids=${STUDENT_ROLE_ID}&limit=${limit}&start=${start}")
+    page_users=$(echo "$page" | jq '.user // []')
+    page_count=$(echo "$page_users" | jq 'length')
+    total=$(echo "$page" | jq '.total // 0 | tonumber')
 
-while true; do
-  page=$(api_get "/v1/users?role_ids=${STUDENT_ROLE_ID}&limit=${limit}&start=${start}")
-  page_users=$(echo "$page" | jq '.user // []')
-  page_count=$(echo "$page_users" | jq 'length')
-  total=$(echo "$page" | jq '.total // 0 | tonumber')
+    all=$(echo "$all $page_users" | jq -s 'add')
+    start=$((start + page_count))
 
-  students_json=$(echo "$students_json $page_users" | jq -s 'add')
-  start=$((start + page_count))
+    if [ "$page_count" -eq 0 ] || [ "$start" -ge "$total" ]; then
+      break
+    fi
+  done
 
-  if [ "$page_count" -eq 0 ] || [ "$start" -ge "$total" ]; then
-    break
+  echo "$all"
+}
+
+update_students() {
+  local students="$1"
+  local total_checked update_count skipped
+
+  to_update=$(echo "$students" | jq --arg td "$TARGET_DATE" '[.[] | select(.birthday_date != $td)]')
+  total_checked=$(echo "$students" | jq 'length')
+  update_count=$(echo "$to_update" | jq 'length')
+  skipped=$((total_checked - update_count))
+
+  echo "Checked:  ${total_checked}"
+  echo "Skipped:  ${skipped} (already ${TARGET_DATE})"
+  echo "Updating: ${update_count}"
+
+  if [ "$update_count" -eq 0 ]; then
+    echo "Nothing to do."
+    return
   fi
-done
 
-total_students=$(echo "$students_json" | jq 'length')
-echo "Total students fetched: ${total_students}"
+  local updated=0 batch_size=50
+  while [ "$updated" -lt "$update_count" ]; do
+    batch=$(echo "$to_update" | jq --argjson offset "$updated" --argjson size "$batch_size" '.[$offset:$offset+$size]')
+    payload=$(echo "$batch" | jq --arg td "$TARGET_DATE" '{"users":{"user":[.[] | {"id": .id, "birthday_date": $td}]}}')
+    api_put "/v1/users" "$payload" > /dev/null
+    batch_actual=$(echo "$batch" | jq 'length')
+    updated=$((updated + batch_actual))
+    echo "Updated ${updated}/${update_count}"
+    if [ "$updated" -lt "$update_count" ]; then
+      sleep 0.5
+    fi
+  done
 
-to_update=$(echo "$students_json" | jq --arg td "$TARGET_DATE" '[.[] | select(.birthday_date != $td)]')
-skipped=$(echo "$students_json" | jq --arg td "$TARGET_DATE" '[.[] | select(.birthday_date == $td)] | length')
-update_count=$(echo "$to_update" | jq 'length')
+  echo "Done."
+}
 
-echo "Already correct: ${skipped}"
-echo "To update: ${update_count}"
+# Main
+if [[ "$MODE" == "--uid" ]]; then
+  echo "Fetching student with school_uid: ${MODE_ARG}..."
+  result=$(api_get "/v1/users?school_uid=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$MODE_ARG" 2>/dev/null || printf '%s' "$MODE_ARG")")
+  student=$(echo "$result" | jq '.user[0] // empty')
+  if [ -z "$student" ]; then
+    echo "No user found with school_uid: ${MODE_ARG}" >&2
+    exit 1
+  fi
+  id=$(echo "$student" | jq -r '.id')
+  echo "Found: id ${id}"
+  update_students "$(echo "$student" | jq -s '.')"
 
-if [ "$update_count" -eq 0 ]; then
-  echo "Nothing to do."
-  exit 0
+elif [[ "$MODE" == "--random" ]]; then
+  echo "Fetching one page of students to pick from..."
+  data=$(api_get "/v1/users?role_ids=${STUDENT_ROLE_ID}&limit=200&start=0")
+  students=$(echo "$data" | jq '.user // []')
+  count=$(echo "$students" | jq 'length')
+  if [ "$count" -eq 0 ]; then
+    echo "No students found." >&2
+    exit 1
+  fi
+  idx=$((RANDOM % count))
+  student=$(echo "$students" | jq ".[$idx]")
+  id=$(echo "$student" | jq -r '.id')
+  echo "Randomly selected: id ${id}"
+  update_students "$(echo "$student" | jq -s '.')"
+
+elif [[ "$MODE" == "--all" ]]; then
+  echo "Fetching all students..."
+  students=$(fetch_all_students)
+  total=$(echo "$students" | jq 'length')
+  echo "Total fetched: ${total}"
+  update_students "$students"
 fi
-
-batch_size=50
-updated=0
-batch_num=0
-total_batches=$(( (update_count + batch_size - 1) / batch_size ))
-
-while [ "$updated" -lt "$update_count" ]; do
-  batch=$(echo "$to_update" | jq --argjson offset "$updated" --argjson size "$batch_size" '.[$offset:$offset+$size]')
-  payload=$(echo "$batch" | jq --arg td "$TARGET_DATE" '{"users":{"user":[.[] | {"id": .id, "birthday_date": $td}]}}')
-
-  api_put "/v1/users" "$payload" > /dev/null
-  batch_num=$((batch_num + 1))
-  batch_actual=$(echo "$batch" | jq 'length')
-  updated=$((updated + batch_actual))
-
-  echo "Updated batch ${batch_num}/${total_batches} (${updated}/${update_count})"
-done
-
-echo "Done. Updated ${updated} student(s)."

@@ -4,6 +4,7 @@
   "description": "Anonymize student birthdates in Schoology via REST API",
   "main": "update-birthdate.js",
   "scripts": {
+    "list-roles": "node list-roles.js",
     "start": "node update-birthdate.js"
   },
   "dependencies": {
