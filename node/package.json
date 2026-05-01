@@ -1,0 +1,12 @@
+{
+  "name": "update-schoology-birthdate",
+  "version": "1.0.0",
+  "description": "Anonymize student birthdates in Schoology via REST API",
+  "main": "update-birthdate.js",
+  "scripts": {
+    "start": "node update-birthdate.js"
+  },
+  "dependencies": {
+    "dotenv": "^16"
+  }
+}
